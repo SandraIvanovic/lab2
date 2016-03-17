@@ -1,4 +1,4 @@
--------------------------------------------------------------------------------
+------------------------------------------------------------------------------
 --  Department of Computer Engineering and Communications
 --  Author: LPRS2  <lprs2@rt-rk.com>
 --
@@ -23,6 +23,8 @@ entity top is
   port (
     clk_i          : in  std_logic;
     reset_n_i      : in  std_logic;
+	 direct_mode_i  : in	 std_logic;
+	 display_mode_i : in  std_logic_vector(1 downto 0);
     -- vga
     vga_hsync_o    : out std_logic;
     vga_vsync_o    : out std_logic;
@@ -32,9 +34,7 @@ entity top is
     sync_o         : out std_logic;
     red_o          : out std_logic_vector(7 downto 0);
     green_o        : out std_logic_vector(7 downto 0);
-    blue_o         : out std_logic_vector(7 downto 0);
-	 direct_mode_i  : in std_logic;
-	 display_mode_i : in std_logic_vector(1 downto 0)
+    blue_o         : out std_logic_vector(7 downto 0)
    );
 end top;
 
@@ -123,10 +123,26 @@ architecture rtl of top is
   );
   end component;
   
+  component reg
+	generic(
+		WIDTH    : positive := 1;
+		RST_INIT : integer := 0
+	);
+	port(
+		i_clk  : in  std_logic;
+		in_rst : in  std_logic;
+		i_d    : in  std_logic_vector(WIDTH-1 downto 0);
+		o_q    : out std_logic_vector(WIDTH-1 downto 0)
+	);
+	end component;
+  
   
   constant update_period     : std_logic_vector(31 downto 0) := conv_std_logic_vector(1, 32);
   
   constant GRAPH_MEM_ADDR_WIDTH : natural := MEM_ADDR_WIDTH + 6;-- graphics addres is scales with minumum char size 8*8 log2(64) = 6
+  
+  type ADDR_ARRAY is array (0 to 5) of std_logic_vector(5 downto 0);
+  signal text_to_screen : ADDR_ARRAY := ("00"&x"1", "00"&x"2", "00"&x"3", "00"&x"4", "00"&x"5", "00"&x"6");
   
   -- text
   signal message_lenght      : std_logic_vector(MEM_ADDR_WIDTH-1 downto 0);
@@ -159,6 +175,15 @@ architecture rtl of top is
   signal dir_pixel_column    : std_logic_vector(10 downto 0);
   signal dir_pixel_row       : std_logic_vector(10 downto 0);
 
+  signal txt_addr_reg		  : std_logic_vector(MEM_ADDR_WIDTH - 1 downto 0);
+  signal next_txt_addr		  : std_logic_vector(MEM_ADDR_WIDTH - 1 downto 0);
+  
+  signal graph_addr_reg		  : std_logic_vector(GRAPH_MEM_ADDR_WIDTH - 1 downto 0);
+  signal next_graph_addr_reg : std_logic_vector(GRAPH_MEM_ADDR_WIDTH - 1 downto 0);
+
+  
+  
+  
 begin
 
   -- calculate message lenght from font size
@@ -170,8 +195,11 @@ begin
   graphics_lenght <= conv_std_logic_vector(MEM_SIZE*8*8, GRAPH_MEM_ADDR_WIDTH);
   
   -- removed to inputs pin
-  direct_mode <= '1';
-  display_mode     <= "10";  -- 01 - text mode, 10 - graphics mode, 11 - text & graphics
+  --direct_mode <= '1';
+  --display_mode     <= "10";  -- 01 - text mode, 10 - graphics mode, 11 - text & graphics
+  
+  direct_mode <= direct_mode_i;
+  display_mode <= display_mode_i;
   
   font_size        <= x"1";
   show_frame       <= '1';
@@ -248,31 +276,151 @@ begin
     blue_o             => blue_o     
   );
   
+  
+  
+  -- tekst
+  next_txt_addr <= txt_addr_reg + 1 when txt_addr_reg < 1200
+						 else (others => '0');		--conv_std_logic_vector(1001, MEM_ADDR_WIDTH);
+  
+  cnt_reg1: reg
+  generic map(
+		WIDTH    => MEM_ADDR_WIDTH,
+		RST_INIT => 0
+	)
+   port map(
+		i_clk  => pix_clock_s,
+		in_rst => vga_rst_n_s,
+		i_d    => next_txt_addr,
+		o_q    => txt_addr_reg
+	);
+	
+	
+	-- kvadratic
+	next_graph_addr_reg <= graph_addr_reg + 1 when graph_addr_reg < 9600		-- 1199??
+							 else (others => '0');		--conv_std_logic_vector(9600, GRAPH_MEM_ADDR_WIDTH);
+		
+
+
+		
+	cnt_reg2: reg
+	generic map(
+		WIDTH    => GRAPH_MEM_ADDR_WIDTH,
+		RST_INIT => 0
+	)
+	port map(
+		i_clk  => pix_clock_s,
+		in_rst => vga_rst_n_s,
+		i_d    => next_graph_addr_reg,
+		o_q    => graph_addr_reg
+	);						 
+	
+  
+  
+  
   -- na osnovu signala iz vga_top modula dir_pixel_column i dir_pixel_row realizovati logiku koja genereise
   --dir_red
   --dir_green
   --dir_blue
-  dir_red <= x"FF" when dir_pixel_column < 160 else 
-				 x"FF" when(dir_pixel_column >= 320 and  dir_pixel_column < 480) else 
-				 x"00"; 
-	dir_green <= x"FF" when  dir_pixel_column < 320 else
-					x"00"; 
-	dir_blue <= x"FF" when dir_pixel_column < 80 else 
-					x"FF" when (dir_pixel_column >= 160 and dir_pixel_column < 240) else
-					x"FF" when (dir_pixel_column >= 320 and dir_pixel_column < 400) else
-					x"FF" when (dir_pixel_column >= 480 and dir_pixel_column < 560) else 
-					x"00"; 
-				
+  
+  --FF FF FF
+  --FF FF 00
+  --00 FF FF
+  --00 FF 00
+  --FF 00 FF
+  --FF 00 00
+  --00 00 FF
+  --00 00 00			-- H_RES
+ 
+  dir_red <= x"FF" when dir_pixel_column >= 0 and dir_pixel_column < (H_RES/8) else
+				 x"FF" when dir_pixel_column >= (H_RES/8) and dir_pixel_column < (H_RES/4) else
+				 x"00" when dir_pixel_column >= (H_RES/4) and dir_pixel_column < (3*H_RES/8) else
+				 x"00" when dir_pixel_column >= (3*H_RES/8) and dir_pixel_column < (H_RES/2) else
+				 x"FF" when dir_pixel_column >= (H_RES/2) and dir_pixel_column < (5*H_RES/8) else
+				 x"FF" when dir_pixel_column >= (5*H_RES/8) and dir_pixel_column < (6*H_RES/8) else
+				 x"00" when dir_pixel_column >= (6*H_RES/8) and dir_pixel_column < (7*H_RES/8) else
+				 x"00";
+
+	dir_green <= x"FF" when dir_pixel_column >= 0 and dir_pixel_column < (H_RES/8) else
+					 x"FF" when dir_pixel_column >= (H_RES/8) and dir_pixel_column < (H_RES/4) else
+					 x"FF" when dir_pixel_column >= (H_RES/4) and dir_pixel_column < (3*H_RES/8) else
+					 x"FF" when dir_pixel_column >= (3*H_RES/8) and dir_pixel_column < (H_RES/2) else
+					 x"00" when dir_pixel_column >= (H_RES/2) and dir_pixel_column < (5*H_RES/8) else
+					 x"00" when dir_pixel_column >= (5*H_RES/8) and dir_pixel_column < (6*H_RES/8) else
+					 x"00" when dir_pixel_column >= (6*H_RES/8) and dir_pixel_column < (7*H_RES/8) else
+					 x"00";
+  
+  dir_blue <= x"FF" when dir_pixel_column >= 0 and dir_pixel_column < (H_RES/8) else
+				  x"00" when dir_pixel_column >= (H_RES/8) and dir_pixel_column < (H_RES/4) else
+				  x"FF" when dir_pixel_column >= (H_RES/4) and dir_pixel_column < (3*H_RES/8) else
+				  x"00" when dir_pixel_column >= (3*H_RES/8) and dir_pixel_column < (H_RES/2) else
+				  x"FF" when dir_pixel_column >= (H_RES/2) and dir_pixel_column < (5*H_RES/8) else
+				  x"00" when dir_pixel_column >= (5*H_RES/8) and dir_pixel_column < (6*H_RES/8) else
+				  x"FF" when dir_pixel_column >= (6*H_RES/8) and dir_pixel_column < (7*H_RES/8) else
+				  x"00";
  
   -- koristeci signale realizovati logiku koja pise po TXT_MEM
   --char_address
   --char_value
   --char_we
   
+  
+  char_address <= txt_addr_reg;
+  char_we <= '1';			-- when txt_addr_reg < 1200 else '0';
+					 
+  char_value <= o"23" when char_address = 0 else
+					 o"01" when char_address = 1 else
+					 o"13" when char_address = 2 else
+					 o"11" when char_address = 3 else
+					 o"40" when char_address = 4 else
+					 "000000";	-- razmak
+					 
+
   -- koristeci signale realizovati logiku koja pise po GRAPH_MEM
   --pixel_address
   --pixel_value
   --pixel_we
+  
+   pixel_address <= graph_addr_reg;
+	pixel_we <= '1';
+	pixel_value <= x"FFFFFFFF" when pixel_address = 4410 else
+					   x"FFFFFFFF" when pixel_address = 4430 else
+					   x"FFFFFFFF" when pixel_address = 4450 else
+					   x"FFFFFFFF" when pixel_address = 4470 else
+					   x"FFFFFFFF" when pixel_address = 4490 else
+					   x"FFFFFFFF" when pixel_address = 4510 else
+					   x"FFFFFFFF" when pixel_address = 4530 else
+					   x"FFFFFFFF" when pixel_address = 4550 else
+					   x"FFFFFFFF" when pixel_address = 4570 else
+					   x"FFFFFFFF" when pixel_address = 4590 else
+					   x"FFFFFFFF" when pixel_address = 4610 else
+					   x"FFFFFFFF" when pixel_address = 4630 else
+					   x"FFFFFFFF" when pixel_address = 4650 else
+					   x"FFFFFFFF" when pixel_address = 4670 else
+					   x"FFFFFFFF" when pixel_address = 4690 else
+					   x"FFFFFFFF" when pixel_address = 4710 else
+					   x"FFFFFFFF" when pixel_address = 4730 else
+					   x"FFFFFFFF" when pixel_address = 4750 else
+					   x"FFFFFFFF" when pixel_address = 4770 else
+					   x"FFFFFFFF" when pixel_address = 4790 else
+					   x"FFFFFFFF" when pixel_address = 4810 else
+					   x"FFFFFFFF" when pixel_address = 4830 else
+					   x"FFFFFFFF" when pixel_address = 4850 else
+					   x"FFFFFFFF" when pixel_address = 4870 else
+					   x"FFFFFFFF" when pixel_address = 4890 else
+					   x"FFFFFFFF" when pixel_address = 4910 else
+					   x"FFFFFFFF" when pixel_address = 4930 else
+					   x"FFFFFFFF" when pixel_address = 4950 else
+					   x"FFFFFFFF" when pixel_address = 4970 else
+					   x"FFFFFFFF" when pixel_address = 4990 else
+					   x"FFFFFFFF" when pixel_address = 5010 else
+					   x"FFFFFFFF" when pixel_address = 5030 else
+					   x"FFFFFFFF" when pixel_address = 5050 else
+					   x"FFFFFFFF" when pixel_address = 5070 else
+					   x"FFFFFFFF" when pixel_address = 5090 else
+					   x"FFFFFFFF" when pixel_address = 5110 else
+					   x"FFFFFFFF" when pixel_address = 5130 else
+					   x"00000000";
+  
   
   
 end rtl;
